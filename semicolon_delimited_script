@@ -1,0 +1,116 @@
+export DEVKITPRO=/opt/devkitpro
+export DEVKITARM=$DEVKITPRO/devkitARM
+export PATH=$DEVKITPRO/tools/bin:$DEVKITARM/bin:$PATH
+
+cd /work
+set -e
+
+echo "=========================================="
+echo " Pokemon Mega Automated Native Pipeline   "
+echo "=========================================="
+
+# [1/6] System Environment Dependencies
+rm -f /etc/apt/sources.list.d/devkitpro.list
+apt-get update -y && apt-get install -y --no-install-recommends python3 python3-pip imagemagick ffmpeg curl jq
+pip3 install pillow --break-system-packages
+
+# [2/6] Clean Workspace & Filesystem Setup
+mkdir -p build romfs/gfx build_logs
+chmod -Rf 777 .
+
+# PROTECTIVE LAYER: Backup the clean master Makefile out of range of the auto-fixer script
+cp Makefile /tmp/Makefile.bak
+
+# [3/6] Model extraction placeholder/pass
+python3 .github/scripts/glb_extractor.py > build_logs/extraction.log 2>&1 || true
+
+# [4/6] Graphic Asset Conversion Pipeline
+TARGET_ASSET_DIR="assets/pallet-town"
+if [ -d "$TARGET_ASSET_DIR" ]; then
+  find "$TARGET_ASSET_DIR" -type f -iname "*.png" | while read -r img; do
+    filename=$(basename "$img")
+    base="${filename%%.*}"
+    convert "$img" -strip -background transparent -alpha on PNG32:"romfs/gfx/${base}.png" >> build_logs/textures.log 2>&1
+    tex3ds -f rgba8888 -z none -o "romfs/gfx/${base}.t3x" "romfs/gfx/${base}.png" >> build_logs/textures.log 2>&1
+    rm -f "romfs/gfx/${base}.png"
+  done
+fi
+
+# [5/6] Assets Layout Verification
+echo "Checking assets..."
+
+# -------------------------------------------------
+# [6/6] Smart Multi-Pass AI Compiler Matrix Loop
+# -------------------------------------------------
+echo ""
+echo "[6/6] Launching compilation matrix..."
+
+# Temporarily disable strict shell crash mode so the loop can negotiate failures
+set +e
+
+MAX_ATTEMPTS=5
+ATTEMPT=1
+BUILD_SUCCESS=1
+
+while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+  echo "--------------------------------------------------"
+  echo "🔄 Build Pass Attempt #$ATTEMPT of $MAX_ATTEMPTS"
+  echo "--------------------------------------------------"
+
+  # SECURITY AUTO-RESTORE: Bring back the master Makefile pristine copy every attempt iteration
+  cp /tmp/Makefile.bak ./Makefile
+  
+  # Dynamically sweep prone-to-corruption shader caches out before make initializes
+  rm -rf build/vshader_shbin.h build/vshader.shbin build/vshader_shbin.d
+  chmod -Rf 777 .
+
+  # Standard shell compatible log collection
+  make VSHCOMP=picasso > build_logs/compiler.log 2>&1
+  BUILD_SUCCESS=$?
+
+  if [ $BUILD_SUCCESS -eq 0 ]; then
+    echo "=============================================="
+    echo "✅ SUCCESS EVALUATION! Checking generated binaries..."
+    echo "=============================================="
+    
+    echo "📁 1. Verifying source files exist and checking exact names/casing:"
+    ls -la source/
+    
+    echo "📁 2. Listing root workspace files:"
+    ls -la
+    
+    echo "📁 3. Listing build directory files:"
+    ls -la build/
+    
+    # Broad wildcard search to copy the targets
+    cp *.3dsx ./PokemonMega.3dsx 2>/dev/null
+    cp build/*.3dsx ./PokemonMega.3dsx 2>/dev/null
+    cp *.elf ./PokemonMega.elf 2>/dev/null
+    cp build/*.elf ./PokemonMega.elf 2>/dev/null
+    
+    chmod 777 ./PokemonMega.3dsx 2>/dev/null
+    break
+  fi
+
+  # Print out the real errors directly to your screen so you see exactly what broke
+  echo "❌ Build pass failed. Printing compiler error log:"
+  cat build_logs/compiler.log
+  echo ""
+
+  echo "⚠️ Invoking AI auto-fix routine..."
+  
+  # Call the universal file scanner python routine to target the exact crash source
+  python3 .github/scripts/auto_fix.py
+
+  ATTEMPT=$((ATTEMPT+1))
+done
+
+# Restore strict exit criteria rule for subsequent runner safety
+set -e
+
+# Force complete job failure if the loop runs out of attempts without a valid payload
+if [ $BUILD_SUCCESS -ne 0 ]; then
+  echo "❌ AI engine reached max iteration capacity ($MAX_ATTEMPTS) without resolving compilation bottlenecks."
+  exit 1
+fi
+
